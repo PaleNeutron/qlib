@@ -27,7 +27,7 @@ class APIBackend(Singleton):
                 json.load(open(self.cache_file_location, "r")) if os.path.exists(self.cache_file_location) else {}
             )
 
-    def build_messages_and_create_chat_completion(self, user_prompt, system_prompt=None):
+    def build_messages_and_create_chat_completion(self, user_prompt, system_prompt=None, **kwargs):
         """build the messages to avoid implementing several redundant lines of code"""
         cfg = Config()
         # TODO: system prompt should always be provided. In development stage we can use default value
@@ -35,7 +35,7 @@ class APIBackend(Singleton):
             try:
                 system_prompt = cfg.system_prompt
             except AttributeError:
-                get_module_logger("finco").warning("system_prompt is not set, using default value.")
+                FinCoLog().warning("system_prompt is not set, using default value.")
                 system_prompt = "You are an AI assistant who helps to answer user's questions about finance."
         messages = [
             {
@@ -48,7 +48,7 @@ class APIBackend(Singleton):
             },
         ]
         fcl = FinCoLog()
-        response = self.try_create_chat_completion(messages=messages)
+        response = self.try_create_chat_completion(messages=messages, **kwargs)
         fcl.log_message(messages)
         fcl.log_response(response)
         return response
@@ -72,9 +72,10 @@ class APIBackend(Singleton):
         model=None,
         temperature: float = None,
         max_tokens: Optional[int] = None,
+        force: bool = False,
     ) -> str:
 
-        if self.debug_mode:
+        if self.debug_mode and not force:
             if messages[1]["content"] in self.cache:
                 return self.cache[messages[1]["content"]]
 
@@ -95,7 +96,7 @@ class APIBackend(Singleton):
                 messages=messages,
             )
         resp = response.choices[0].message["content"]
-        if self.debug_mode:
+        if self.debug_mode and not force:
             self.cache[messages[1]["content"]] = resp
             json.dump(self.cache, open(self.cache_file_location, "w"))
         return resp

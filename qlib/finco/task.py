@@ -59,10 +59,12 @@ class Task:
     def save_chat_history_to_context_manager(self, user_input, response, system_prompt):
         chat_history = self._context_manager.get_context("chat_history")
         if chat_history is None:
-            chat_history = []
-        chat_history.append({"role": "system", "content": system_prompt})
-        chat_history.append({"role": "user", "content": user_input})
-        chat_history.append({"role": "assistant", "content": response})
+            chat_history = {}
+        if self.__class__.__name__ not in chat_history:
+            chat_history[self.__class__.__name__] = []
+        chat_history[self.__class__.__name__].append({"role": "system", "content": system_prompt})
+        chat_history[self.__class__.__name__].append({"role": "user", "content": user_input})
+        chat_history[self.__class__.__name__].append({"role": "assistant", "content": response})
         self._context_manager.update_context("chat_history", chat_history)
 
     @abc.abstractclassmethod
@@ -198,9 +200,9 @@ class SLPlanTask(PlanTask):
                 self._context_manager.set_context(f"{name}_plan", res.group(2))
                 assert res.group(1) in ["Default", "Personized"]
                 if res.group(1) == "Default":
-                    new_task.append(ConfigActionTask(name))
+                    new_task.extend([ConfigActionTask(name), YamlEditTask(name)])
                 elif res.group(1) == "Personized":
-                    new_task.extend([ConfigActionTask(name), ImplementActionTask(name)])
+                    new_task.extend([ConfigActionTask(name), ImplementActionTask(name), YamlEditTask(name), CodeDumpTask(name)])
         return new_task
 
 
@@ -501,7 +503,7 @@ class ImplementActionTask(DifferentiatedComponentActionTask):
 class YamlEditTask(ActionTask):
     """This yaml edit task will replace a specific component directly"""
 
-    def __init__(self, file: Union[str, Path], module_path: str, updated_content: str):
+    def __init__(self, target_component: str):
         """
 
         Parameters
@@ -513,27 +515,63 @@ class YamlEditTask(ActionTask):
         updated_content
             The content to replace the original content in `module_path`
         """
-        self.p = Path(file)
-        self.module_path = module_path
-        self.updated_content = updated_content
+        super().__init__()
+        self.target_component = target_component
+        self.target_config_key = {
+            "Dataset": "dataset",
+            "DataHandler": "handler",
+            "Model": "model",
+            "Strategy": "strategy",
+            "Record": "record",
+            "Backtest": "backtest",
+        }[self.target_component]
+    
+    def replace_key_value_recursive(self, target_dict, target_key, new_value):
+        for key, value in target_dict.items():
+            if key == target_key:
+                target_dict[key] = new_value
+                return True
+            elif isinstance(value, dict):
+                replace_result = self.replace_key_value_recursive(value, target_key, new_value)
+                if replace_result:
+                    return replace_result
+        return False
+
 
     def execute(self):
         # 1) read original and new content
-        with self.p.open("r") as f:
-            config = yaml.safe_load(f)
-        update_config = yaml.safe_load(io.StringIO(self.updated_content))
+        self.original_config_location = Path(os.path.join(self._context_manager.get_context('workspace'), "workflow_config.yaml"))
+        with self.original_config_location.open("r") as f:
+            target_config = yaml.safe_load(f)
+        update_config_string = self._context_manager.get_context(f'{self.target_component}_modified_config')
+        if update_config_string is None:
+            update_config_string = self._context_manager.get_context(f'{self.target_component}_config')
+        update_config = yaml.safe_load(io.StringIO(update_config_string))
 
-        # 2) locate the module
-        focus = config
-        module_list = self.module_path.split(".")
-        for k in module_list[:-1]:
-            focus = focus[k]
+        # 2) replace the module and save
+        assert isinstance(update_config, dict) and self.target_config_key in update_config, "The config file is not in the correct format"
+        assert self.replace_key_value_recursive(target_config, self.target_config_key, update_config[self.target_config_key]), "Replace of the yaml file failed."
+        with self.original_config_location.open("w") as f:
+            yaml.dump(target_config, f)
 
-        # 3) replace the module and save
-        focus[module_list[-1]] = update_config
-        with self.p.open("w") as f:
-            yaml.dump(config, f)
+        return []
 
+class CodeDumpTask(ActionTask):
+    def __init__(self, target_component) -> None:
+        super().__init__()
+        self.target_component = target_component
+    
+    def execute(self):
+        code = self._context_manager.get_context(f'{self.target_component}_code')
+        assert code is not None, "The code is not set"
+        
+        with open(os.path.join(self._context_manager.get_context('workspace'), f'{self.target_component}_code.py'), 'w') as f:
+            f.write(code)
+        
+        try:
+            exec(f"from qlib.finco.{os.path.basename(self._context_manager.get_context('workspace'))}.{self.target_component}_code import *")
+        except ImportError:
+            return [ImplementActionTask(self.target_component), CodeDumpTask(self.target_component)]
 
 class SummarizeTask(Task):
     __DEFAULT_WORKSPACE = "./"

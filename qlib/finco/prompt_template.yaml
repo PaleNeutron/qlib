@@ -327,10 +327,10 @@ mods:
         Config:
         ```yaml
         record: 
-            - class: SignalRecord
-                module_path: qlib.workflow.record_temp
-            - class: SigAnaRecord
-                module_path: qlib.workflow.record_temp
+        - class: SignalRecord
+          module_path: qlib.workflow.record_temp
+        - class: SigAnaRecord
+          module_path: qlib.workflow.record_temp
         ```
         Reason: I choose SignalRecord and SigAnaRecord because they can save all the signals and the analysis results, which will help the user check the metrics and determine whether the system meets the requirements.
         Improve suggestion: The default record classes should be sufficient for your needs. If you need additional information or metrics, you can consider implementing your own custom record class.
